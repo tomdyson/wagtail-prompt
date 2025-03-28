@@ -33,34 +33,66 @@ jobs:
       - name: Fetch latest Wagtail release info using gh CLI
         id: fetch-release
         run: |
-          set -e # Exit immediately if a command exits with a non-zero status.
+          # Keep set -e for overall script safety, but handle the first command's potential failure
+          set -e
 
-          echo "Fetching latest release info using 'gh release view latest'..."
-          # Use 'gh release view latest' which provides detailed fields including zipballUrl
-          RELEASE_INFO=$(gh release view latest -R wagtail/wagtail --json tagName,zipballUrl)
+          echo "Attempting to fetch latest release info using 'gh release view latest'..."
+          # Run the command and capture its exit code ($?) without exiting the script on failure
+          RELEASE_INFO="" # Initialize variable
+          LATEST_VIEW_EXIT_CODE=0 # Default to success
+          # Execute command, redirect output, and capture exit code if it fails
+          gh release view latest -R wagtail/wagtail --json tagName,zipballUrl > release_info.json || LATEST_VIEW_EXIT_CODE=$?
 
-          # Robustness check: If 'view latest' fails (e.g., no release marked 'latest'), try getting the top one from the list
-          if [ -z "$RELEASE_INFO" ] || [ "$(echo "$RELEASE_INFO" | jq -r '.tagName')" == "null" ]; then
-            echo "Warning: 'gh release view latest' failed or returned null data. Falling back to top release from list."
+          # Check if the command failed (non-zero exit code)
+          if [ "$LATEST_VIEW_EXIT_CODE" -ne 0 ]; then
+            echo "Warning: 'gh release view latest' failed (Exit Code: $LATEST_VIEW_EXIT_CODE - likely no 'latest' release marked). Falling back to top release from list."
+            # Ensure file is cleaned up if it exists but is empty/invalid from failed command
+            rm -f release_info.json
+
+            # Proceed with fallback (set -e is still active for these commands)
+            echo "Fetching tag name of the most recent release..."
             LATEST_TAG=$(gh release list -R wagtail/wagtail -L 1 --json tagName --jq '.[0].tagName')
             if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
                echo "Error: Fallback failed. Could not get latest tag name from 'gh release list'."
                exit 1
             fi
+
             echo "Fetching details for tag: $LATEST_TAG"
-            RELEASE_INFO=$(gh release view "$LATEST_TAG" -R wagtail/wagtail --json tagName,zipballUrl)
+            # Fetch details for the specific tag found
+            gh release view "$LATEST_TAG" -R wagtail/wagtail --json tagName,zipballUrl > release_info.json
+            # Check if this fallback command succeeded (set -e handles this, but explicit check is clearer)
+            if [ $? -ne 0 ]; then
+              echo "Error: Failed to fetch release view for tag '$LATEST_TAG' during fallback."
+              # The script would exit here anyway due to set -e, but message helps debugging
+              exit 1
+            fi
+            # Read the content from the file populated by the successful fallback
+            RELEASE_INFO=$(cat release_info.json)
+
+          else
+            # Command succeeded, read the file content
+            echo "Successfully fetched info using 'gh release view latest'."
+            RELEASE_INFO=$(cat release_info.json)
+            # Add a check for empty/null content even if command succeeded technically
+            if [ -z "$RELEASE_INFO" ] || [ "$(echo "$RELEASE_INFO" | jq -r '.tagName // "null"')" == "null" ]; then
+               echo "Error: 'gh release view latest' succeeded but returned empty/null data. This indicates an unexpected API state."
+               exit 1
+            fi
           fi
 
-          # Final check on the fetched info
+          # Clean up temporary file
+          rm -f release_info.json
+
+          # Final check on the fetched info (ensure RELEASE_INFO is not empty after all attempts)
           if [ -z "$RELEASE_INFO" ]; then
-            echo "Error: Failed to fetch release info from GitHub API after fallback attempts."
+            echo "Error: Failed to fetch valid release info from GitHub API after all attempts."
             exit 1
           fi
 
+          # --- Rest of the parsing and output logic ---
           VERSION=$(echo "$RELEASE_INFO" | jq -r '.tagName')
           DOWNLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.zipballUrl')
 
-          # Validate parsed values
           if [ -z "$VERSION" ] || [ "$VERSION" == "null" ] || [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
             echo "Error: Could not parse version or download URL from release info."
             echo "API Response used for parsing: $RELEASE_INFO"
@@ -71,9 +103,9 @@ jobs:
           echo "WAGTAIL_DOWNLOAD_URL=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
           echo "OUTPUT_FILENAME=wagtail-docs-${VERSION}.txt" >> $GITHUB_OUTPUT
 
-          echo "Successfully determined latest Wagtail version: $VERSION"
+          echo "Successfully determined latest Wagtail version: $VERSION (via fallback or direct 'latest')"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Provide token for gh cli
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Group download, extract, process, and cleanup under one conditional step
       # for better readability, or keep separate if preferred.
