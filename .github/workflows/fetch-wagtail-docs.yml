@@ -59,7 +59,7 @@ jobs:
       - name: Process documentation
         run: |
           cd "$WAGTAIL_DIR/docs"
-          files-to-prompt ./ -e md -e rst -c > "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
+          files-to-prompt ./ -e md -e rst --ignore "releases" --ignore "README.md" -c > "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
           
       - name: Clean up and prepare commit
         run: |
