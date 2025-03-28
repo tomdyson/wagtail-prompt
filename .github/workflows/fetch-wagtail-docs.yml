@@ -32,21 +32,38 @@ jobs:
 
       - name: Fetch latest Wagtail release info using gh CLI
         id: fetch-release
-        # Use gh cli and jq for a cleaner way to get release info
-        # Ensure GH_TOKEN is available for API calls (usually automatic)
         run: |
           set -e # Exit immediately if a command exits with a non-zero status.
-          RELEASE_INFO=$(gh release list -R wagtail/wagtail -L 1 --json tagName,zipballUrl)
+
+          echo "Fetching latest release info using 'gh release view latest'..."
+          # Use 'gh release view latest' which provides detailed fields including zipballUrl
+          RELEASE_INFO=$(gh release view latest -R wagtail/wagtail --json tagName,zipballUrl)
+
+          # Robustness check: If 'view latest' fails (e.g., no release marked 'latest'), try getting the top one from the list
+          if [ -z "$RELEASE_INFO" ] || [ "$(echo "$RELEASE_INFO" | jq -r '.tagName')" == "null" ]; then
+            echo "Warning: 'gh release view latest' failed or returned null data. Falling back to top release from list."
+            LATEST_TAG=$(gh release list -R wagtail/wagtail -L 1 --json tagName --jq '.[0].tagName')
+            if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
+               echo "Error: Fallback failed. Could not get latest tag name from 'gh release list'."
+               exit 1
+            fi
+            echo "Fetching details for tag: $LATEST_TAG"
+            RELEASE_INFO=$(gh release view "$LATEST_TAG" -R wagtail/wagtail --json tagName,zipballUrl)
+          fi
+
+          # Final check on the fetched info
           if [ -z "$RELEASE_INFO" ]; then
-            echo "Error: Failed to fetch release info from GitHub API."
+            echo "Error: Failed to fetch release info from GitHub API after fallback attempts."
             exit 1
           fi
+
           VERSION=$(echo "$RELEASE_INFO" | jq -r '.tagName')
           DOWNLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.zipballUrl')
 
+          # Validate parsed values
           if [ -z "$VERSION" ] || [ "$VERSION" == "null" ] || [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
             echo "Error: Could not parse version or download URL from release info."
-            echo "API Response: $RELEASE_INFO"
+            echo "API Response used for parsing: $RELEASE_INFO"
             exit 1
           fi
 
@@ -54,22 +71,9 @@ jobs:
           echo "WAGTAIL_DOWNLOAD_URL=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
           echo "OUTPUT_FILENAME=wagtail-docs-${VERSION}.txt" >> $GITHUB_OUTPUT
 
-          echo "Latest Wagtail version: $VERSION"
+          echo "Successfully determined latest Wagtail version: $VERSION"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Provide token for gh cli
-
-      - name: Check if documentation already exists
-        id: doc_exists
-        run: |
-          OUTPUT_FILENAME="${{ steps.fetch-release.outputs.OUTPUT_FILENAME }}"
-          echo "Checking for file: $OUTPUT_FILENAME"
-          if [ -f "$OUTPUT_FILENAME" ]; then
-            echo "Documentation for Wagtail ${{ steps.fetch-release.outputs.WAGTAIL_VERSION }} already exists, skipping."
-            echo "DOC_EXISTS=true" >> $GITHUB_OUTPUT
-          else
-            echo "Documentation file does not exist, proceeding."
-            echo "DOC_EXISTS=false" >> $GITHUB_OUTPUT
-          fi
 
       # Group download, extract, process, and cleanup under one conditional step
       # for better readability, or keep separate if preferred.
