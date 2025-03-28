@@ -25,6 +25,9 @@ jobs:
           pip install requests
           pip install ttok
           
+          # Verify ttok is installed correctly as a command-line tool
+          echo -n "Hello world" | ttok
+          
       - name: Fetch latest Wagtail release info
         id: fetch-release
         run: |
@@ -88,43 +91,77 @@ jobs:
       - name: Process documentation
         run: |
           cd "$WAGTAIL_DIR/docs"
+          echo "Processing documentation from $(pwd)"
+          echo "Output will be: $GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
+          
+          # Check if the files-to-prompt command is available
+          which files-to-prompt
+          
+          # List the directory contents to confirm what we're processing
+          ls -la
+          
+          # Run the command with verbose output
           files-to-prompt ./ -e md -e rst --ignore "releases" --ignore "README.md" -c > "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
           
+          # Check if the file was created
+          if [ -f "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt" ]; then
+            echo "Documentation file created successfully."
+            ls -la "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
+          else
+            echo "Error: Documentation file was not created!"
+            exit 1
+          fi
+          
       - name: Clean up and prepare commit
+        id: doc_exists
         run: |
+          # Debug: List all files in the current directory
+          echo "Files in the current directory:"
+          ls -la
+          
           # Remove all non-README files from prior runs
           find . -type f -not -path "*/\.*" -not -name "README.md" -not -name "wagtail-docs-$WAGTAIL_VERSION.txt" -delete
           
-          # If file already exists, don't overwrite
+          # Debug: Check exact filename we're looking for
+          echo "Checking for file: wagtail-docs-$WAGTAIL_VERSION.txt"
+          
+          # If file already exists, don't overwrite and set output
           if [ -f "wagtail-docs-$WAGTAIL_VERSION.txt" ]; then
             echo "Documentation for Wagtail $WAGTAIL_VERSION already exists, skipping."
+            echo "DOC_EXISTS=true" >> $GITHUB_OUTPUT
             exit 0
+          else
+            echo "Documentation file does not exist, will create it."
+            echo "DOC_EXISTS=false" >> $GITHUB_OUTPUT
           fi
           
           rm -rf temp
           
       - name: Calculate token count and update README
+        if: steps.doc_exists.outputs.DOC_EXISTS != 'true'
         run: |
-          # Create a Python script file for calculating tokens and updating README
+          # Use ttok as a command-line tool instead of a Python library
+          echo "Calculating token counts for wagtail-docs-$WAGTAIL_VERSION.txt"
+          
+          # Calculate tokens using ttok command line
+          CL100K_COUNT=$(cat "wagtail-docs-$WAGTAIL_VERSION.txt" | ttok --encoding cl100k_base)
+          GPT3_COUNT=$(cat "wagtail-docs-$WAGTAIL_VERSION.txt" | ttok --encoding p50k_base)
+          
+          echo "Token counts - OpenAI (cl100k): $CL100K_COUNT, GPT-3 (p50k): $GPT3_COUNT"
+          
+          # Create Python script to update README
           cat > update_readme.py << 'EOF'
-          import ttok
           import os
           import re
           
           wagtail_version = os.environ['WAGTAIL_VERSION']
+          cl100k_count = os.environ['CL100K_COUNT']
+          gpt3_count = os.environ['GPT3_COUNT']
+          
           filename = f"wagtail-docs-{wagtail_version}.txt"
+          token_count_msg = f'OpenAI (cl100k): {cl100k_count}, GPT-3 (p50k): {gpt3_count}'
           
           try:
-              with open(filename, 'r', encoding='utf-8') as f:
-                  content = f.read()
-              
-              # Get token counts for different models
-              cl100k_count = ttok.tokens(content, 'cl100k_base')
-              gpt3_count = ttok.tokens(content, 'p50k_base')
-              
-              token_count_msg = f'OpenAI (cl100k): {cl100k_count}, GPT-3 (p50k): {gpt3_count}'
-              print(token_count_msg)
-              
               # Read README
               with open('README.md', 'r', encoding='utf-8') as f:
                   readme_content = f.read()
@@ -156,10 +193,15 @@ jobs:
               exit(1)
           EOF
           
-          # Run the script
+          # Pass token counts to the Python script via environment variables
+          export CL100K_COUNT=$CL100K_COUNT
+          export GPT3_COUNT=$GPT3_COUNT
+          
+          # Run the script to update README
           python update_readme.py
           
       - name: Commit and push changes
+        if: steps.doc_exists.outputs.DOC_EXISTS != 'true'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
