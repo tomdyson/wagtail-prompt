@@ -28,24 +28,48 @@ jobs:
       - name: Fetch latest Wagtail release info
         id: fetch-release
         run: |
-          LATEST_RELEASE=$(python -c "
+          python - <<EOF
           import requests
           import json
+          import sys
+          import os
           
+          # First try the 'latest' API endpoint
           response = requests.get('https://api.github.com/repos/wagtail/wagtail/releases/latest')
           data = response.json()
+          
+          # Check if we got a valid response with tag_name
+          if 'tag_name' not in data:
+              print("Warning: 'tag_name' not found in latest release API response.")
+              print("Response data:", json.dumps(data))
+              
+              # Fall back to listing all releases and picking the first one
+              print("Falling back to releases list...")
+              response = requests.get('https://api.github.com/repos/wagtail/wagtail/releases')
+              releases = response.json()
+              
+              if not releases or not isinstance(releases, list) or len(releases) == 0:
+                  print("Error: Could not find any releases")
+                  sys.exit(1)
+                  
+              # First release in the list is the most recent
+              data = releases[0]
+              
+              if 'tag_name' not in data:
+                  print("Error: Could not find tag_name in any release data")
+                  sys.exit(1)
           
           version = data['tag_name']
           download_url = data['zipball_url']
           
-          print(json.dumps({
-              'version': version,
-              'download_url': download_url
-          }))
-          ")
+          print(f"WAGTAIL_VERSION={version}")
+          print(f"WAGTAIL_DOWNLOAD_URL={download_url}")
           
-          echo "WAGTAIL_VERSION=$(echo $LATEST_RELEASE | jq -r '.version')" >> $GITHUB_ENV
-          echo "WAGTAIL_DOWNLOAD_URL=$(echo $LATEST_RELEASE | jq -r '.download_url')" >> $GITHUB_ENV
+          # Add to GitHub env
+          with open(os.environ['GITHUB_ENV'], 'a') as env_file:
+              env_file.write(f"WAGTAIL_VERSION={version}\n")
+              env_file.write(f"WAGTAIL_DOWNLOAD_URL={download_url}\n")
+          EOF
           
           echo "Processing Wagtail version: $WAGTAIL_VERSION"
           
@@ -78,40 +102,55 @@ jobs:
       - name: Calculate token count and update README
         run: |
           # Calculate token count using ttok
-          TOKEN_COUNT=$(python -c "
+          python - <<EOF
           import ttok
+          import os
           
-          with open('wagtail-docs-$WAGTAIL_VERSION.txt', 'r') as f:
-              content = f.read()
+          wagtail_version = os.environ['WAGTAIL_VERSION']
+          filename = f"wagtail-docs-{wagtail_version}.txt"
           
-          # Get token counts for different models
-          cl100k_count = ttok.tokens(content, 'cl100k_base')
-          gpt3_count = ttok.tokens(content, 'p50k_base')
-          
-          print(f'OpenAI (cl100k): {cl100k_count}, GPT-3 (p50k): {gpt3_count}')
-          ")
-          
-          echo "Token count: $TOKEN_COUNT"
-          
-          # Update README with latest version and token count
-          README_CONTENT=$(cat README.md)
-          
-          # Check if the Latest Version section exists
-          if grep -q "## Latest Version" README.md; then
-            # Replace the existing section
-            sed -i "s|## Latest Version.*|## Latest Version\n\nThe latest version is [$WAGTAIL_VERSION](./wagtail-docs-$WAGTAIL_VERSION.txt)\n\n**Token Count:** $TOKEN_COUNT|" README.md
-          else
-            # Add the section if it doesn't exist
-            cat > README.md << EOF
-          $(cat README.md)
-          
-          ## Latest Version
-          
-          The latest version is [$WAGTAIL_VERSION](./wagtail-docs-$WAGTAIL_VERSION.txt)
-          
-          **Token Count:** $TOKEN_COUNT
+          try:
+              with open(filename, 'r', encoding='utf-8') as f:
+                  content = f.read()
+              
+              # Get token counts for different models
+              cl100k_count = ttok.tokens(content, 'cl100k_base')
+              gpt3_count = ttok.tokens(content, 'p50k_base')
+              
+              token_count_msg = f'OpenAI (cl100k): {cl100k_count}, GPT-3 (p50k): {gpt3_count}'
+              print(token_count_msg)
+              
+              # Update the README
+              with open('README.md', 'r', encoding='utf-8') as f:
+                  readme_content = f.read()
+              
+              latest_section = f"""## Latest Version
+
+The latest version is [{wagtail_version}](./{filename})
+
+**Token Count:** {token_count_msg}"""
+              
+              if "## Latest Version" in readme_content:
+                  # Replace the existing section using Python instead of sed
+                  import re
+                  pattern = r"## Latest Version.*?(?=##|\Z)"
+                  replacement = latest_section
+                  new_readme = re.sub(pattern, replacement, readme_content, flags=re.DOTALL)
+              else:
+                  # Add the section if it doesn't exist
+                  new_readme = readme_content + "\n\n" + latest_section
+              
+              with open('README.md', 'w', encoding='utf-8') as f:
+                  f.write(new_readme)
+                  
+              print("README updated successfully")
+              
+          except Exception as e:
+              print(f"Error processing file: {str(e)}")
+              import traceback
+              traceback.print_exc()
+              exit(1)
           EOF
-          fi
           
       - name: Commit and push changes
         run: |
