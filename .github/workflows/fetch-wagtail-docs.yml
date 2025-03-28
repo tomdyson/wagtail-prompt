@@ -124,11 +124,11 @@ jobs:
               with open('README.md', 'r', encoding='utf-8') as f:
                   readme_content = f.read()
               
-              latest_section = f"""## Latest Version
+              latest_section = f'''## Latest Version
 
 The latest version is [{wagtail_version}](./{filename})
 
-**Token Count:** {token_count_msg}"""
+**Token Count:** {token_count_msg}'''
               
               if "## Latest Version" in readme_content:
                   # Replace the existing section using Python instead of sed
