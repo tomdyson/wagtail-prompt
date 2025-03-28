@@ -119,7 +119,7 @@ jobs:
           ls -la
           
           # Run the command with verbose output
-          files-to-prompt ./ -e md -e rst --ignore "releases" --ignore "README.md" -c > "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
+          files-to-prompt ./ -e md -e rst --ignore "releases" --ignore "contributing" --ignore "README.md" -c > "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
           
           # Check if the file was created
           if [ -f "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt" ]; then
