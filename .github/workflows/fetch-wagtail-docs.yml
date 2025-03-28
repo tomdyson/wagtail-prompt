@@ -143,10 +143,9 @@ jobs:
           echo "Calculating token counts for wagtail-docs-$WAGTAIL_VERSION.txt"
           
           # Calculate tokens using ttok command line
-          CL100K_COUNT=$(cat "wagtail-docs-$WAGTAIL_VERSION.txt" | ttok --encoding cl100k_base)
-          GPT3_COUNT=$(cat "wagtail-docs-$WAGTAIL_VERSION.txt" | ttok --encoding p50k_base)
+          TTOK_COUNT=$(cat "wagtail-docs-$WAGTAIL_VERSION.txt" | ttok)
           
-          echo "Token counts - OpenAI (cl100k): $CL100K_COUNT, GPT-3 (p50k): $GPT3_COUNT"
+          echo "Token counts: $TTOK_COUNT"
           
           # Create Python script to update README
           cat > update_readme.py << 'EOF'
@@ -154,11 +153,10 @@ jobs:
           import re
           
           wagtail_version = os.environ['WAGTAIL_VERSION']
-          cl100k_count = os.environ['CL100K_COUNT']
-          gpt3_count = os.environ['GPT3_COUNT']
+          ttok_count = os.environ['TTOK_COUNT']
           
           filename = f"wagtail-docs-{wagtail_version}.txt"
-          token_count_msg = f'OpenAI (cl100k): {cl100k_count}, GPT-3 (p50k): {gpt3_count}'
+          token_count_msg = f'{ttok_count}'
           
           try:
               # Read README
@@ -193,8 +191,7 @@ jobs:
           EOF
           
           # Pass token counts to the Python script via environment variables
-          export CL100K_COUNT=$CL100K_COUNT
-          export GPT3_COUNT=$GPT3_COUNT
+          export TTOK_COUNT=$TTOK_COUNT
           
           # Run the script to update README
           python update_readme.py
