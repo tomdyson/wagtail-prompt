@@ -4,11 +4,7 @@ on:
   schedule:
     # Run at midnight UTC every day
     - cron: '0 0 * * *'
-  workflow_dispatch: # Allow manual triggering
-
-# Add permissions required for pushing to the repo
-permissions:
-  contents: write
+  workflow_dispatch:  # Allow manual triggering
 
 jobs:
   fetch-docs:
@@ -16,192 +12,206 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        # Fetch full history needed for checking existing tags/files and pushing
-        with:
-          fetch-depth: 0
-
+        
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-
+          
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install files-to-prompt ttok # Combine installs
-
-      - name: Fetch latest Wagtail release info using gh CLI
+          pip install files-to-prompt
+          pip install requests
+          pip install ttok
+          
+          # Verify ttok is installed correctly as a command-line tool
+          echo -n "Hello world" | ttok
+          
+      - name: Fetch latest Wagtail release info
         id: fetch-release
         run: |
-          # Keep set -e for overall script safety, but handle the first command's potential failure
-          set -e
-
-          echo "Attempting to fetch latest release info using 'gh release view latest'..."
-          # Run the command and capture its exit code ($?) without exiting the script on failure
-          RELEASE_INFO="" # Initialize variable
-          LATEST_VIEW_EXIT_CODE=0 # Default to success
-          # Execute command, redirect output, and capture exit code if it fails
-          gh release view latest -R wagtail/wagtail --json tagName,zipballUrl > release_info.json || LATEST_VIEW_EXIT_CODE=$?
-
-          # Check if the command failed (non-zero exit code)
-          if [ "$LATEST_VIEW_EXIT_CODE" -ne 0 ]; then
-            echo "Warning: 'gh release view latest' failed (Exit Code: $LATEST_VIEW_EXIT_CODE - likely no 'latest' release marked). Falling back to top release from list."
-            # Ensure file is cleaned up if it exists but is empty/invalid from failed command
-            rm -f release_info.json
-
-            # Proceed with fallback (set -e is still active for these commands)
-            echo "Fetching tag name of the most recent release..."
-            LATEST_TAG=$(gh release list -R wagtail/wagtail -L 1 --json tagName --jq '.[0].tagName')
-            if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
-               echo "Error: Fallback failed. Could not get latest tag name from 'gh release list'."
-               exit 1
-            fi
-
-            echo "Fetching details for tag: $LATEST_TAG"
-            # Fetch details for the specific tag found
-            gh release view "$LATEST_TAG" -R wagtail/wagtail --json tagName,zipballUrl > release_info.json
-            # Check if this fallback command succeeded (set -e handles this, but explicit check is clearer)
-            if [ $? -ne 0 ]; then
-              echo "Error: Failed to fetch release view for tag '$LATEST_TAG' during fallback."
-              # The script would exit here anyway due to set -e, but message helps debugging
-              exit 1
-            fi
-            # Read the content from the file populated by the successful fallback
-            RELEASE_INFO=$(cat release_info.json)
-
+          # Create a Python script file instead of inline code
+          cat > get_release.py << 'EOF'
+          import requests
+          import json
+          import sys
+          import os
+          
+          # First try the 'latest' API endpoint
+          response = requests.get('https://api.github.com/repos/wagtail/wagtail/releases/latest')
+          data = response.json()
+          
+          # Check if we got a valid response with tag_name
+          if 'tag_name' not in data:
+              print("Warning: 'tag_name' not found in latest release API response.")
+              print("Response data:", json.dumps(data))
+              
+              # Fall back to listing all releases and picking the first one
+              print("Falling back to releases list...")
+              response = requests.get('https://api.github.com/repos/wagtail/wagtail/releases')
+              releases = response.json()
+              
+              if not releases or not isinstance(releases, list) or len(releases) == 0:
+                  print("Error: Could not find any releases")
+                  sys.exit(1)
+                  
+              # First release in the list is the most recent
+              data = releases[0]
+              
+              if 'tag_name' not in data:
+                  print("Error: Could not find tag_name in any release data")
+                  sys.exit(1)
+          
+          version = data['tag_name']
+          download_url = data['zipball_url']
+          
+          print(f"WAGTAIL_VERSION={version}")
+          print(f"WAGTAIL_DOWNLOAD_URL={download_url}")
+          
+          # Add to GitHub env
+          with open(os.environ['GITHUB_ENV'], 'a') as env_file:
+              env_file.write(f"WAGTAIL_VERSION={version}\n")
+              env_file.write(f"WAGTAIL_DOWNLOAD_URL={download_url}\n")
+          EOF
+          
+          # Run the script
+          python get_release.py
+          
+          echo "Processing Wagtail version: $WAGTAIL_VERSION"
+      
+      - name: Check if documentation already exists
+        id: doc_exists
+        run: |
+          # Debug: List all files in the current directory
+          echo "Files in the current directory:"
+          ls -la
+          
+          # Check exact filename we're looking for
+          echo "Checking for file: wagtail-docs-$WAGTAIL_VERSION.txt"
+          
+          # If file already exists, don't process
+          if [ -f "wagtail-docs-$WAGTAIL_VERSION.txt" ]; then
+            echo "Documentation for Wagtail $WAGTAIL_VERSION already exists, skipping."
+            echo "DOC_EXISTS=true" >> $GITHUB_OUTPUT
           else
-            # Command succeeded, read the file content
-            echo "Successfully fetched info using 'gh release view latest'."
-            RELEASE_INFO=$(cat release_info.json)
-            # Add a check for empty/null content even if command succeeded technically
-            if [ -z "$RELEASE_INFO" ] || [ "$(echo "$RELEASE_INFO" | jq -r '.tagName // "null"')" == "null" ]; then
-               echo "Error: 'gh release view latest' succeeded but returned empty/null data. This indicates an unexpected API state."
-               exit 1
-            fi
+            echo "Documentation file does not exist, will create it."
+            echo "DOC_EXISTS=false" >> $GITHUB_OUTPUT
           fi
-
-          # Clean up temporary file
-          rm -f release_info.json
-
-          # Final check on the fetched info (ensure RELEASE_INFO is not empty after all attempts)
-          if [ -z "$RELEASE_INFO" ]; then
-            echo "Error: Failed to fetch valid release info from GitHub API after all attempts."
-            exit 1
-          fi
-
-          # --- Rest of the parsing and output logic ---
-          VERSION=$(echo "$RELEASE_INFO" | jq -r '.tagName')
-          DOWNLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.zipballUrl')
-
-          if [ -z "$VERSION" ] || [ "$VERSION" == "null" ] || [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
-            echo "Error: Could not parse version or download URL from release info."
-            echo "API Response used for parsing: $RELEASE_INFO"
-            exit 1
-          fi
-
-          echo "WAGTAIL_VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          echo "WAGTAIL_DOWNLOAD_URL=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
-          echo "OUTPUT_FILENAME=wagtail-docs-${VERSION}.txt" >> $GITHUB_OUTPUT
-
-          echo "Successfully determined latest Wagtail version: $VERSION (via fallback or direct 'latest')"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Group download, extract, process, and cleanup under one conditional step
-      # for better readability, or keep separate if preferred.
-      - name: Download, Process, and Cleanup
-        if: steps.doc_exists.outputs.DOC_EXISTS == 'false'
+          
+      - name: Download and extract Wagtail
+        if: steps.doc_exists.outputs.DOC_EXISTS != 'true'
         run: |
-          set -e # Exit on error
-          TEMP_DIR="temp_wagtail"
-          WAGTAIL_VERSION="${{ steps.fetch-release.outputs.WAGTAIL_VERSION }}"
-          DOWNLOAD_URL="${{ steps.fetch-release.outputs.WAGTAIL_DOWNLOAD_URL }}"
-          OUTPUT_FILENAME="${{ steps.fetch-release.outputs.OUTPUT_FILENAME }}"
-
-          echo "Creating temporary directory $TEMP_DIR..."
-          mkdir -p "$TEMP_DIR"
-
-          echo "Downloading Wagtail $WAGTAIL_VERSION from $DOWNLOAD_URL..."
-          curl -L "$DOWNLOAD_URL" -o "$TEMP_DIR/wagtail.zip"
-
-          echo "Extracting Wagtail..."
-          unzip -q "$TEMP_DIR/wagtail.zip" -d "$TEMP_DIR/"
-          # Find the extracted directory (robustly handles potential hash in name)
-          EXTRACTED_DIR=$(find "$TEMP_DIR" -maxdepth 1 -type d -name 'wagtail-wagtail-*' | head -n 1)
-          if [ -z "$EXTRACTED_DIR" ]; then
-            echo "Error: Could not find extracted Wagtail directory in $TEMP_DIR"
-            ls -la "$TEMP_DIR" # List contents for debugging
+          mkdir -p temp
+          curl -L "$WAGTAIL_DOWNLOAD_URL" -o temp/wagtail.zip
+          unzip -q temp/wagtail.zip -d temp/
+          WAGTAIL_DIR=$(ls -d temp/wagtail-wagtail-*)
+          echo "WAGTAIL_DIR=$WAGTAIL_DIR" >> $GITHUB_ENV
+          
+      - name: Process documentation
+        if: steps.doc_exists.outputs.DOC_EXISTS != 'true'
+        run: |
+          cd "$WAGTAIL_DIR/docs"
+          echo "Processing documentation from $(pwd)"
+          echo "Output will be: $GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
+          
+          # List the directory contents to confirm what we're processing
+          ls -la
+          
+          # Run the command with verbose output
+          files-to-prompt ./ -e md -e rst --ignore "releases" --ignore "README.md" -c > "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
+          
+          # Check if the file was created
+          if [ -f "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt" ]; then
+            echo "Documentation file created successfully."
+            ls -la "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
+          else
+            echo "Error: Documentation file was not created!"
             exit 1
           fi
-          WAGTAIL_DOCS_DIR="$EXTRACTED_DIR/docs"
-          echo "Found Wagtail docs at: $WAGTAIL_DOCS_DIR"
-
-          echo "Processing documentation..."
-          # Ensure the docs directory exists
-          if [ ! -d "$WAGTAIL_DOCS_DIR" ]; then
-             echo "Error: Documentation directory '$WAGTAIL_DOCS_DIR' not found after extraction."
-             ls -la "$EXTRACTED_DIR" # List contents for debugging
-             exit 1
-          fi
-          # Run files-to-prompt from the correct directory
-          files-to-prompt "$WAGTAIL_DOCS_DIR" -e md -e rst --ignore "releases" --ignore "README.md" -c > "$GITHUB_WORKSPACE/$OUTPUT_FILENAME"
-
-          # Verify output file creation
-          if [ ! -f "$GITHUB_WORKSPACE/$OUTPUT_FILENAME" ]; then
-            echo "Error: Output file $GITHUB_WORKSPACE/$OUTPUT_FILENAME was not created by files-to-prompt."
-            exit 1
-          fi
-          echo "Documentation processed into $OUTPUT_FILENAME."
-
-          echo "Cleaning up temporary files..."
-          rm -rf "$TEMP_DIR"
-          echo "Cleanup complete."
-
+          
+      - name: Clean up temporary files
+        if: steps.doc_exists.outputs.DOC_EXISTS != 'true'
+        run: |
+          # Remove temporary files
+          rm -rf temp
+          
       - name: Calculate token count and update README
-        if: steps.doc_exists.outputs.DOC_EXISTS == 'false'
+        if: steps.doc_exists.outputs.DOC_EXISTS != 'true'
         run: |
-          set -e
-          OUTPUT_FILENAME="${{ steps.fetch-release.outputs.OUTPUT_FILENAME }}"
-          echo "Calculating token count for $OUTPUT_FILENAME..."
-          # Use ttok command line tool
-          TTOK_COUNT=$(cat "$GITHUB_WORKSPACE/$OUTPUT_FILENAME" | ttok)
-          if ! [[ "$TTOK_COUNT" =~ ^[0-9]+$ ]]; then
-             echo "Error: Failed to get valid token count from ttok. Output: $TTOK_COUNT"
-             exit 1
-          fi
-          echo "Token count: $TTOK_COUNT"
-
-          echo "Updating README.md..."
-          # Pass variables as environment variables to the Python script
-          export WAGTAIL_VERSION="${{ steps.fetch-release.outputs.WAGTAIL_VERSION }}"
-          export TTOK_COUNT="$TTOK_COUNT"
-          export OUTPUT_FILENAME="$OUTPUT_FILENAME" # Pass filename to script
-          python .github/scripts/update_readme.py
-
+          # Use ttok as a command-line tool instead of a Python library
+          echo "Calculating token counts for wagtail-docs-$WAGTAIL_VERSION.txt"
+          
+          # Calculate tokens using ttok command line
+          TTOK_COUNT=$(cat "wagtail-docs-$WAGTAIL_VERSION.txt" | ttok)
+          
+          echo "Token counts: $TTOK_COUNT"
+          
+          # Create Python script to update README
+          cat > update_readme.py << 'EOF'
+          import os
+          import re
+          
+          wagtail_version = os.environ['WAGTAIL_VERSION']
+          ttok_count = os.environ['TTOK_COUNT']
+          
+          filename = f"wagtail-docs-{wagtail_version}.txt"
+          token_count_msg = f'{ttok_count}'
+          
+          try:
+              # Read README
+              with open('README.md', 'r', encoding='utf-8') as f:
+                  readme_content = f.read()
+              
+              # Create the new section content
+              latest_section = "## Latest Version\n\n"
+              latest_section += f"The latest version is [{wagtail_version}](./{filename})\n\n"
+              latest_section += f"**Token Count:** {token_count_msg}"
+              
+              # Update README
+              if "## Latest Version" in readme_content:
+                  # Replace the existing section using regex
+                  pattern = r"## Latest Version.*?(?=##|\Z)"
+                  new_readme = re.sub(pattern, latest_section, readme_content, flags=re.DOTALL)
+              else:
+                  # Add the section if it doesn't exist
+                  new_readme = readme_content + "\n\n" + latest_section
+              
+              # Write the updated README
+              with open('README.md', 'w', encoding='utf-8') as f:
+                  f.write(new_readme)
+                  
+              print("README updated successfully")
+              
+          except Exception as e:
+              print(f"Error processing file: {str(e)}")
+              import traceback
+              traceback.print_exc()
+              exit(1)
+          EOF
+          
+          # Pass token counts to the Python script via environment variables
+          export TTOK_COUNT=$TTOK_COUNT
+          
+          # Run the script to update README
+          python update_readme.py
+          
       - name: Commit and push changes
-        if: steps.doc_exists.outputs.DOC_EXISTS == 'false'
+        if: steps.doc_exists.outputs.DOC_EXISTS != 'true'
         run: |
-          set -e
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-
-          # Pull latest changes from the branch the workflow is running on (usually main/master)
-          # Use GITHUB_REF_NAME which holds the branch name
-          git pull origin ${GITHUB_REF_NAME}
-
-          OUTPUT_FILENAME="${{ steps.fetch-release.outputs.OUTPUT_FILENAME }}"
-
-          # Check if there are actual changes to commit in the specific files
-          # `git diff --quiet --exit-code` exits with 0 if no changes, 1 if changes
-          if ! git diff --quiet --exit-code "$GITHUB_WORKSPACE/$OUTPUT_FILENAME" README.md; then
-            echo "Changes detected in $OUTPUT_FILENAME or README.md. Committing..."
-            git add "$GITHUB_WORKSPACE/$OUTPUT_FILENAME" README.md
-            git commit -m "Add docs for Wagtail ${{ steps.fetch-release.outputs.WAGTAIL_VERSION }} and update README"
-
-            echo "Pushing changes..."
-            # Use standard push, fail if there are upstream changes (safer than force)
-            git push origin ${GITHUB_REF_NAME}
-            echo "Changes pushed successfully."
+          
+          # Pull the latest changes first
+          git pull origin main
+          
+          # Check if there are changes to commit
+          if git status --porcelain | grep -q "wagtail-docs-\|README.md"; then
+            git add "wagtail-docs-$WAGTAIL_VERSION.txt" README.md
+            git commit -m "Add documentation for Wagtail $WAGTAIL_VERSION and update README"
+            
+            # Push with force-with-lease to ensure we don't overwrite others' changes
+            git push --force-with-lease
           else
-            echo "No changes detected in $OUTPUT_FILENAME or README.md. Nothing to commit."
+            echo "No new documentation to commit"
           fi
