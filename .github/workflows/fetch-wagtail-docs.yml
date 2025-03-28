@@ -81,9 +81,14 @@ jobs:
           
           # Check if there are changes to commit
           if git status --porcelain | grep -q "wagtail-docs-"; then
+            # Pull the latest changes first
+            git pull origin main
+            
             git add "wagtail-docs-$WAGTAIL_VERSION.txt"
             git commit -m "Add documentation for Wagtail $WAGTAIL_VERSION"
-            git push
+            
+            # Push with force-with-lease to ensure we don't overwrite others' changes
+            git push --force-with-lease
           else
             echo "No new documentation to commit"
           fi
