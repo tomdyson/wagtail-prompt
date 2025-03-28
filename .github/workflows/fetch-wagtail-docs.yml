@@ -28,7 +28,8 @@ jobs:
       - name: Fetch latest Wagtail release info
         id: fetch-release
         run: |
-          python - <<EOF
+          # Create a Python script file instead of inline code
+          cat > get_release.py << 'EOF'
           import requests
           import json
           import sys
@@ -71,6 +72,9 @@ jobs:
               env_file.write(f"WAGTAIL_DOWNLOAD_URL={download_url}\n")
           EOF
           
+          # Run the script
+          python get_release.py
+          
           echo "Processing Wagtail version: $WAGTAIL_VERSION"
           
       - name: Download and extract Wagtail
@@ -101,10 +105,11 @@ jobs:
           
       - name: Calculate token count and update README
         run: |
-          # Calculate token count using ttok
-          python - <<EOF
+          # Create a Python script file for calculating tokens and updating README
+          cat > update_readme.py << 'EOF'
           import ttok
           import os
+          import re
           
           wagtail_version = os.environ['WAGTAIL_VERSION']
           filename = f"wagtail-docs-{wagtail_version}.txt"
@@ -120,26 +125,25 @@ jobs:
               token_count_msg = f'OpenAI (cl100k): {cl100k_count}, GPT-3 (p50k): {gpt3_count}'
               print(token_count_msg)
               
-              # Update the README
+              # Read README
               with open('README.md', 'r', encoding='utf-8') as f:
                   readme_content = f.read()
               
-              latest_section = f'''## Latest Version
-
-The latest version is [{wagtail_version}](./{filename})
-
-**Token Count:** {token_count_msg}'''
+              # Create the new section content
+              latest_section = "## Latest Version\n\n"
+              latest_section += f"The latest version is [{wagtail_version}](./{filename})\n\n"
+              latest_section += f"**Token Count:** {token_count_msg}"
               
+              # Update README
               if "## Latest Version" in readme_content:
-                  # Replace the existing section using Python instead of sed
-                  import re
+                  # Replace the existing section using regex
                   pattern = r"## Latest Version.*?(?=##|\Z)"
-                  replacement = latest_section
-                  new_readme = re.sub(pattern, replacement, readme_content, flags=re.DOTALL)
+                  new_readme = re.sub(pattern, latest_section, readme_content, flags=re.DOTALL)
               else:
                   # Add the section if it doesn't exist
                   new_readme = readme_content + "\n\n" + latest_section
               
+              # Write the updated README
               with open('README.md', 'w', encoding='utf-8') as f:
                   f.write(new_readme)
                   
@@ -151,6 +155,9 @@ The latest version is [{wagtail_version}](./{filename})
               traceback.print_exc()
               exit(1)
           EOF
+          
+          # Run the script
+          python update_readme.py
           
       - name: Commit and push changes
         run: |
