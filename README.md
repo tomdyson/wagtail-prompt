@@ -32,3 +32,10 @@ We are using Claude's recommended XML structure for the combined documentation. 
 ## Excluded Content
 
 The content of the 'releases' directory is excluded from the combined documentation.
+
+
+## Latest Version
+
+The latest version is [v6.4.1](./wagtail-docs-v6.4.1.txt)
+
+**Token Count:** 296632
