@@ -35,4 +35,4 @@ The content of the 'releases' directory is excluded from the combined documentat
 
 The latest version is [v6.4.1](./wagtail-docs-v6.4.1.txt)
 
-**Token Count:** 296632
+**Token Count:** 265070
