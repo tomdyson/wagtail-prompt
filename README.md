@@ -24,3 +24,11 @@ You can manually trigger the workflow by going to the "Actions" tab in the GitHu
 ## Using the Documentation
 
 The generated text files are formatted specifically for use with Large Language Models. They contain the consolidated documentation with proper context and formatting to maximize the LLM's ability to understand and utilize the Wagtail documentation.
+
+## Claude's Recommended XML Structure
+
+We are using Claude's recommended XML structure for the combined documentation. This structure helps in organizing the content in a way that is optimized for processing by Large Language Models. For more details on the XML structure, please refer to [Claude's Long Context Tips](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/long-context-tips).
+
+## Excluded Content
+
+The content of the 'releases' directory is excluded from the combined documentation.
