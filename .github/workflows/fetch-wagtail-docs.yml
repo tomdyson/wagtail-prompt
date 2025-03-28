@@ -23,6 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install files-to-prompt
           pip install requests
+          pip install ttok
           
       - name: Fetch latest Wagtail release info
         id: fetch-release
@@ -59,7 +60,7 @@ jobs:
       - name: Process documentation
         run: |
           cd "$WAGTAIL_DIR/docs"
-          files-to-prompt ./ -e md -e rst --ignore "releases" --ignore "README.md" -c > "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
+          files-to-prompt ./ -e md -e rst -c --exclude "releases/**" > "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
           
       - name: Clean up and prepare commit
         run: |
@@ -74,18 +75,56 @@ jobs:
           
           rm -rf temp
           
+      - name: Calculate token count and update README
+        run: |
+          # Calculate token count using ttok
+          TOKEN_COUNT=$(python -c "
+          import ttok
+          
+          with open('wagtail-docs-$WAGTAIL_VERSION.txt', 'r') as f:
+              content = f.read()
+          
+          # Get token counts for different models
+          cl100k_count = ttok.tokens(content, 'cl100k_base')
+          gpt3_count = ttok.tokens(content, 'p50k_base')
+          
+          print(f'OpenAI (cl100k): {cl100k_count}, GPT-3 (p50k): {gpt3_count}')
+          ")
+          
+          echo "Token count: $TOKEN_COUNT"
+          
+          # Update README with latest version and token count
+          README_CONTENT=$(cat README.md)
+          
+          # Check if the Latest Version section exists
+          if grep -q "## Latest Version" README.md; then
+            # Replace the existing section
+            sed -i "s|## Latest Version.*|## Latest Version\n\nThe latest version is [$WAGTAIL_VERSION](./wagtail-docs-$WAGTAIL_VERSION.txt)\n\n**Token Count:** $TOKEN_COUNT|" README.md
+          else
+            # Add the section if it doesn't exist
+            cat > README.md << EOF
+          $(cat README.md)
+          
+          ## Latest Version
+          
+          The latest version is [$WAGTAIL_VERSION](./wagtail-docs-$WAGTAIL_VERSION.txt)
+          
+          **Token Count:** $TOKEN_COUNT
+          EOF
+          fi
+          
       - name: Commit and push changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
+          # Pull the latest changes first
+          git pull origin main
+          
           # Check if there are changes to commit
-          if git status --porcelain | grep -q "wagtail-docs-"; then
-            # Pull the latest changes first
-            git pull origin main
-            
-            git add "wagtail-docs-$WAGTAIL_VERSION.txt"
-            git commit -m "Add documentation for Wagtail $WAGTAIL_VERSION"
+          if git status --porcelain | grep -q "wagtail-docs-\|README.md"; then
+            git add "wagtail-docs-$WAGTAIL_VERSION.txt" README.md
+            git commit -m "Add documentation for Wagtail $WAGTAIL_VERSION and update README"
             
             # Push with force-with-lease to ensure we don't overwrite others' changes
             git push --force-with-lease
