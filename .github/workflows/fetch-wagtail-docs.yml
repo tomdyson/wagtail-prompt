@@ -79,8 +79,28 @@ jobs:
           python get_release.py
           
           echo "Processing Wagtail version: $WAGTAIL_VERSION"
+      
+      - name: Check if documentation already exists
+        id: doc_exists
+        run: |
+          # Debug: List all files in the current directory
+          echo "Files in the current directory:"
+          ls -la
+          
+          # Check exact filename we're looking for
+          echo "Checking for file: wagtail-docs-$WAGTAIL_VERSION.txt"
+          
+          # If file already exists, don't process
+          if [ -f "wagtail-docs-$WAGTAIL_VERSION.txt" ]; then
+            echo "Documentation for Wagtail $WAGTAIL_VERSION already exists, skipping."
+            echo "DOC_EXISTS=true" >> $GITHUB_OUTPUT
+          else
+            echo "Documentation file does not exist, will create it."
+            echo "DOC_EXISTS=false" >> $GITHUB_OUTPUT
+          fi
           
       - name: Download and extract Wagtail
+        if: steps.doc_exists.outputs.DOC_EXISTS != 'true'
         run: |
           mkdir -p temp
           curl -L "$WAGTAIL_DOWNLOAD_URL" -o temp/wagtail.zip
@@ -89,13 +109,11 @@ jobs:
           echo "WAGTAIL_DIR=$WAGTAIL_DIR" >> $GITHUB_ENV
           
       - name: Process documentation
+        if: steps.doc_exists.outputs.DOC_EXISTS != 'true'
         run: |
           cd "$WAGTAIL_DIR/docs"
           echo "Processing documentation from $(pwd)"
           echo "Output will be: $GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
-          
-          # Check if the files-to-prompt command is available
-          which files-to-prompt
           
           # List the directory contents to confirm what we're processing
           ls -la
@@ -112,29 +130,10 @@ jobs:
             exit 1
           fi
           
-      - name: Clean up and prepare commit
-        id: doc_exists
+      - name: Clean up temporary files
+        if: steps.doc_exists.outputs.DOC_EXISTS != 'true'
         run: |
-          # Debug: List all files in the current directory
-          echo "Files in the current directory:"
-          ls -la
-          
-          # Remove all non-README files from prior runs
-          find . -type f -not -path "*/\.*" -not -name "README.md" -not -name "wagtail-docs-$WAGTAIL_VERSION.txt" -delete
-          
-          # Debug: Check exact filename we're looking for
-          echo "Checking for file: wagtail-docs-$WAGTAIL_VERSION.txt"
-          
-          # If file already exists, don't overwrite and set output
-          if [ -f "wagtail-docs-$WAGTAIL_VERSION.txt" ]; then
-            echo "Documentation for Wagtail $WAGTAIL_VERSION already exists, skipping."
-            echo "DOC_EXISTS=true" >> $GITHUB_OUTPUT
-            exit 0
-          else
-            echo "Documentation file does not exist, will create it."
-            echo "DOC_EXISTS=false" >> $GITHUB_OUTPUT
-          fi
-          
+          # Remove temporary files
           rm -rf temp
           
       - name: Calculate token count and update README
