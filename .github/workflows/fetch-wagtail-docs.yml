@@ -1,0 +1,89 @@
+name: Fetch Wagtail Docs
+
+on:
+  schedule:
+    # Run at midnight UTC every day
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  fetch-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install files-to-prompt
+          pip install requests
+          
+      - name: Fetch latest Wagtail release info
+        id: fetch-release
+        run: |
+          LATEST_RELEASE=$(python -c "
+          import requests
+          import json
+          
+          response = requests.get('https://api.github.com/repos/wagtail/wagtail/releases/latest')
+          data = response.json()
+          
+          version = data['tag_name']
+          download_url = data['zipball_url']
+          
+          print(json.dumps({
+              'version': version,
+              'download_url': download_url
+          }))
+          ")
+          
+          echo "WAGTAIL_VERSION=$(echo $LATEST_RELEASE | jq -r '.version')" >> $GITHUB_ENV
+          echo "WAGTAIL_DOWNLOAD_URL=$(echo $LATEST_RELEASE | jq -r '.download_url')" >> $GITHUB_ENV
+          
+          echo "Processing Wagtail version: $WAGTAIL_VERSION"
+          
+      - name: Download and extract Wagtail
+        run: |
+          mkdir -p temp
+          curl -L "$WAGTAIL_DOWNLOAD_URL" -o temp/wagtail.zip
+          unzip -q temp/wagtail.zip -d temp/
+          WAGTAIL_DIR=$(ls -d temp/wagtail-wagtail-*)
+          echo "WAGTAIL_DIR=$WAGTAIL_DIR" >> $GITHUB_ENV
+          
+      - name: Process documentation
+        run: |
+          cd "$WAGTAIL_DIR/docs"
+          files-to-prompt ./ -e md -e rst -c > "$GITHUB_WORKSPACE/wagtail-docs-$WAGTAIL_VERSION.txt"
+          
+      - name: Clean up and prepare commit
+        run: |
+          # Remove all non-README files from prior runs
+          find . -type f -not -path "*/\.*" -not -name "README.md" -not -name "wagtail-docs-$WAGTAIL_VERSION.txt" -delete
+          
+          # If file already exists, don't overwrite
+          if [ -f "wagtail-docs-$WAGTAIL_VERSION.txt" ]; then
+            echo "Documentation for Wagtail $WAGTAIL_VERSION already exists, skipping."
+            exit 0
+          fi
+          
+          rm -rf temp
+          
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # Check if there are changes to commit
+          if git status --porcelain | grep -q "wagtail-docs-"; then
+            git add "wagtail-docs-$WAGTAIL_VERSION.txt"
+            git commit -m "Add documentation for Wagtail $WAGTAIL_VERSION"
+            git push
+          else
+            echo "No new documentation to commit"
+          fi
