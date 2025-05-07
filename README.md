@@ -29,6 +29,6 @@ The content of the 'releases' and 'contributing' directories is excluded from th
 
 ## Latest Version
 
-The latest version is [v6.4.1](./wagtail-docs-v6.4.1.txt)
+The latest version is [v7.0](./wagtail-docs-v7.0.txt)
 
-**Token Count:** 265070
+**Token Count:** 269606
